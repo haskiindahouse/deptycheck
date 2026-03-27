@@ -5,6 +5,16 @@
 [install]
 whitelist = [ "deptycheck-docs", "pil-fun", "pil-dyn" ]
 
+############################
+### Dependency overrides ###
+############################
+
+[custom.all.collection-utils]
+type = "github"
+url = "https://github.com/buzden/idris2-collection-utils"
+commit = "6df30b19c55233939065129b1c488f4aa4cdf60f"
+ipkg = "collection-utils.ipkg"
+
 #######################
 ### Elab-util-extra ###
 #######################

@@ -27,12 +27,13 @@ record GenSignature where
   targetType : TypeInfo
   {auto 0 targetTypeCorrect : AllTyArgsNamed targetType}
   givenParams : SortedSet $ Fin targetType.args.length
+  constructorFilter : Maybe (List Name)
 
 namespace GenSignature
 
   export
-  characteristics : GenSignature -> (String, List Nat)
-  characteristics $ MkGenSignature ty giv = (show ty.name, toNatList giv)
+  characteristics : GenSignature -> (String, List Nat, Maybe (List String))
+  characteristics $ MkGenSignature ty giv filt = (show ty.name, toNatList giv, map (map show) filt)
 
   export
   showGivens : GenSignature -> String
@@ -147,4 +148,4 @@ callExternalGen sig topmost fuel values =
 
 export
 internalise : (extSig : ExternalGenSignature) -> Subset GenSignature $ \sig => sig.givenParams.size = extSig.givenParams.size
-internalise $ MkExternalGenSignature ty giv _ _ = Element (MkGenSignature ty $ keySet giv) $ keySetSize giv
+internalise $ MkExternalGenSignature ty giv _ _ = Element (MkGenSignature ty (keySet giv) Nothing) $ keySetSize giv

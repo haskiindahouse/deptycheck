@@ -22,7 +22,7 @@ ClosuringContext m =
   )
 
 nameForGen : GenSignature -> Name
-nameForGen sig = let (ty, givs) = characteristics sig in UN $ Basic $ "<\{ty}>\{show givs}"
+nameForGen sig = let (ty, givs, filt) = characteristics sig in UN $ Basic $ "<\{ty}>\{show givs}\{show filt}"
 -- I'm using `UN` but containing chars that cannot be present in the code parsed from the Idris frontend.
 
 -- Instead of staticaly ensuring that map holds only correct values, we check dynamically, because it's hard to go through `==`-based lookup of maps.

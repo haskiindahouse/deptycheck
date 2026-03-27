@@ -40,22 +40,37 @@ export
 DeriveBodyRhsForCon => DeriveBodyForType where
   canonicBody sig n = do
 
-    -- check that there is at least one constructor
-    Prelude.when .| null sig.targetType.cons .| fail "No constructors found for the type `\{show sig.targetType.name}`"
+    -- determine active constructors: apply constructor filter if present
+    -- use base name comparison to handle different qualification levels
+    let nameBase : Name -> Name
+        nameBase (NS _ x) = nameBase x
+        nameBase (DN _ x) = nameBase x
+        nameBase x        = x
+    let nameMatchesAny : Name -> List Name -> Bool
+        nameMatchesAny cn fns = any (\fn => nameBase cn == nameBase fn) fns
+    let activeCons = case sig.constructorFilter of
+          Nothing    => sig.targetType.cons
+          Just names => filter (\con => nameMatchesAny con.name names) sig.targetType.cons
+
+    -- check that there is at least one constructor (after filtering)
+    Prelude.when .| null activeCons .| fail "No constructors found for the type `\{show sig.targetType.name}`"
 
     -- check that desired `Gen` is not a generator of `Gen`s
     Prelude.when .| sig.targetType.name == `{Test.DepTyCheck.Gen.Gen} .| fail "Target type of a derived `Gen` cannot be a `Gen`"
 
     -- generate claims for generators per constructors
-    let consClaims = sig.targetType.cons <&> \con => export' (consGenName con) (canonicSig sig)
+    let consClaims = activeCons <&> \con => export' (consGenName con) (canonicSig sig)
 
     -- derive bodies for generators per constructors
-    consBodies <- for sig.targetType.cons $ \con => logBounds Info "deptycheck.derive.consBody" [sig, con] $
+    consBodies <- for activeCons $ \con => logBounds Info "deptycheck.derive.consBody" [sig, con] $
       canonicConsBody sig (consGenName con) con <&> def (consGenName con)
 
     -- calculate which constructors are recursive and spend fuel, and which are not
-    let Just consRecs = lookupConsWithWeight sig
+    let Just allConsRecs = lookupConsWithWeight sig
       | Nothing => fail "INTERNAL ERROR: unknown type for consRecs: \{show sig.targetType.name}"
+    -- filter consRecs to match active constructors
+    let activeConsNames = map (.name) activeCons
+    let consRecs = filter (\(con, _) => con.name `elem` activeConsNames) allConsRecs
 
     -- compute all needed weigthing functions, if any
     let typesWithWeightFun = mapMaybe (usedWeightFun . snd) consRecs

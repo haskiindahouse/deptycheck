@@ -289,6 +289,15 @@ callMainDerivedGen sig fuelArg = do
   map (reorderGend True sig.gendOrder . fst) $
     callGen intSig (var fuelArg) $ rewrite prf in sig.givenParams.asVect <&> \(_, _, name) => var $ nameMod name
 
+callMainDerivedGenSubset : DerivationClosure m => NamesInfoInTypes => ConsRecs => (constructors : List Name) -> ExternalGenSignature -> (fuelArg : Name) -> m TTImp
+callMainDerivedGenSubset constructors sig fuelArg = do
+  let Element intSig prf = internalise sig
+  let filteredIntSig : GenSignature := MkGenSignature intSig.targetType @{intSig.targetTypeCorrect} intSig.givenParams (Just constructors)
+  let values : Vect intSig.givenParams.size TTImp :=
+        rewrite prf in sig.givenParams.asVect <&> \(_, _, name) => var $ nameMod name
+  map (reorderGend True sig.gendOrder . fst) $
+    callGen filteredIntSig (var fuelArg) (believe_me values)
+
 wrapFuel : (fuelArg : Name) -> TTImp -> TTImp
 wrapFuel fuelArg = lam $ MkArg MW ExplicitArg (Just fuelArg) `(Data.Fuel.Fuel)
 
@@ -305,6 +314,22 @@ deriveGenExpr signature = do
   _ <- logBounds Trace "deptycheck.derive.namesInfo" [] $ getNamesInfoInTypes signature.targetType
   _ <- logBounds Trace "deptycheck.derive.consRec" [] getConsRecs
   (callExpr, locals) <- runCanonic externalsSigToName $ callMainDerivedGen signature fuelArg
+  wrapFuel fuelArg <$> internalGenCallingLambda checkResult (local locals callExpr)
+
+||| Derive generator expression for a subset of constructors of the target type.
+||| This allows deriving generators for large types by splitting them into smaller chunks,
+||| each processing only a subset of constructors, avoiding OOM during elaboration.
+export
+deriveGenSubsetExpr : DeriveBodyForType => (constructors : List Name) -> (signature : TTImp) -> Elab TTImp
+deriveGenSubsetExpr constructors signature = do
+  checkResult@(signature ** externals ** _) <- checkTypeIsGen DerivationTask signature
+  let externalsSigToName = fromList $ externals.externals <&> \(sig, _) => (sig, nameForGen sig)
+  let fuelArg = outmostFuelArg
+  -- Discover all sub-types using the full constructor list
+  _ <- logBounds Trace "deptycheck.derive.namesInfo" [] $ getNamesInfoInTypes signature.targetType
+  _ <- logBounds Trace "deptycheck.derive.consRec" [] getConsRecs
+  -- Run derivation with filtered constructor set
+  (callExpr, locals) <- runCanonic externalsSigToName $ callMainDerivedGenSubset constructors signature fuelArg
   wrapFuel fuelArg <$> internalGenCallingLambda checkResult (local locals callExpr)
 
 ||| The entry-point function of automatic derivation of `Gen`'s.
@@ -350,6 +375,34 @@ deriveGen = do
   Just signature <- goal
      | Nothing => fail "The goal signature is not found. Generators derivation must be used only for fully defined signatures"
   tt <- deriveGenExpr signature
+  check tt
+
+||| Derive generator for a subset of constructors of the target type.
+|||
+||| Usage:
+|||
+|||   ```idris
+|||   data Color = Red | Green | Blue | Yellow | Cyan | Magenta
+|||
+|||   genWarm : Fuel -> Gen MaybeEmpty Color
+|||   genWarm = deriveGenSubset [`{Red}, `{Yellow}]
+|||
+|||   genCool : Fuel -> Gen MaybeEmpty Color
+|||   genCool = deriveGenSubset [`{Green}, `{Blue}, `{Cyan}, `{Magenta}]
+|||
+|||   genAll : Fuel -> Gen MaybeEmpty Color
+|||   genAll fuel = oneOf $ alternativesOf (genWarm fuel) ++ alternativesOf (genCool fuel)
+|||   ```
+|||
+||| This is useful for types with many constructors where `deriveGen` runs out of memory.
+||| Split the constructors into manageable chunks, derive each with `deriveGenSubset`,
+||| then compose with `oneOf`.
+export %macro
+deriveGenSubset : DeriveBodyForType => (constructors : List Name) -> Elab a
+deriveGenSubset constructors = do
+  Just signature <- goal
+     | Nothing => fail "The goal signature is not found. Generators derivation must be used only for fully defined signatures"
+  tt <- deriveGenSubsetExpr constructors signature
   check tt
 
 ||| Alternative entry-point function of automatic derivation of `Gen`'s.
