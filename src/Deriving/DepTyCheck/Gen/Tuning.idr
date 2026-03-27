@@ -51,7 +51,18 @@ namespace GenOrder
 
 namespace Probability
 
+  ||| Interface for tuning probabilities of constructors in derived generators.
+  |||
+  ||| `tuneWeight` returns `Nothing` to disable a constructor entirely
+  ||| (its code won't be derived), or `Just f` to adjust its weight.
+  |||
+  ||| Example — disable a constructor:
+  ||| ```idris
+  ||| ProbabilityTuning `{MyConstructor} where
+  |||   isConstructor = itIsConstructor
+  |||   tuneWeight = Nothing
+  ||| ```
   public export
   interface ProbabilityTuning (0 n : Name) where
     0 isConstructor : (con : IsConstructor n ** GenuineProof con)
-    tuneWeight : Nat1 -> Nat1
+    tuneWeight : Maybe (Nat1 -> Nat1)

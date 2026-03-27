@@ -40,22 +40,27 @@ export
 DeriveBodyRhsForCon => DeriveBodyForType where
   canonicBody sig n = do
 
-    -- check that there is at least one constructor
-    Prelude.when .| null sig.targetType.cons .| fail "No constructors found for the type `\{show sig.targetType.name}`"
+    -- calculate which constructors are recursive and spend fuel, and which are not
+    -- (this also filters out constructors disabled via ProbabilityTuning Nothing)
+    let Just consRecs = lookupConsWithWeight sig
+      | Nothing => fail "INTERNAL ERROR: unknown type for consRecs: \{show sig.targetType.name}"
+
+    -- active constructors = only those present in consRecs (disabled ones filtered out)
+    let activeConsNames = map ((.name) . fst) consRecs
+    let activeCons = filter (\con => con.name `elem` activeConsNames) sig.targetType.cons
+
+    -- check that there is at least one active constructor
+    Prelude.when .| null activeCons .| fail "No constructors found for the type `\{show sig.targetType.name}` (all disabled via tuning?)"
 
     -- check that desired `Gen` is not a generator of `Gen`s
     Prelude.when .| sig.targetType.name == `{Test.DepTyCheck.Gen.Gen} .| fail "Target type of a derived `Gen` cannot be a `Gen`"
 
     -- generate claims for generators per constructors
-    let consClaims = sig.targetType.cons <&> \con => export' (consGenName con) (canonicSig sig)
+    let consClaims = activeCons <&> \con => export' (consGenName con) (canonicSig sig)
 
     -- derive bodies for generators per constructors
-    consBodies <- for sig.targetType.cons $ \con => logBounds Info "deptycheck.derive.consBody" [sig, con] $
+    consBodies <- for activeCons $ \con => logBounds Info "deptycheck.derive.consBody" [sig, con] $
       canonicConsBody sig (consGenName con) con <&> def (consGenName con)
-
-    -- calculate which constructors are recursive and spend fuel, and which are not
-    let Just consRecs = lookupConsWithWeight sig
-      | Nothing => fail "INTERNAL ERROR: unknown type for consRecs: \{show sig.targetType.name}"
 
     -- compute all needed weigthing functions, if any
     let typesWithWeightFun = mapMaybe (usedWeightFun . snd) consRecs

@@ -177,24 +177,37 @@ weightableTyArgs consRecs ti = fromList $ flip List.mapMaybe ti.args.withIdx $ \
 getConsRecsFor : NamesInfoInTypes => Elaboration m => (desiredTypes : ListMap Name TypeInfo) -> m ConsRecs
 getConsRecsFor desiredTypes = do
   consRecs <- for (toSortedMap desiredTypes) $ \targetType => logBounds DetailedTrace "deptycheck.derive.consRec" [targetType] $ do
-    crsForTy <- for targetType.cons $ \con => do
+    allCrs <- for targetType.cons $ \con => do
       tuneImpl <- search $ ProbabilityTuning con.name
-      w : Either Nat1 (TTImp -> TTImp, SortedSet $ Fin con.args.length) <- case isRecursive {containingType=Just targetType} con of
-        --             ^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^^ <- set of directly recursive constructor arguments
-        --                    \------ Modifier of the standard weight expression
-        False => pure $ Left $ maybe one (\impl => tuneWeight @{impl} one) tuneImpl
-        True  => Right <$> do
-          fuelWeightExpr <- case tuneImpl of
-            Nothing   => pure id
-            Just impl => quote (tuneWeight @{impl}) <&> \wm, expr => workaroundFromNat $ wm `applySyn` expr
-          let directlyRecArgs : List $ Fin con.args.length := flip mapMaybe con.args.withIdx $ \idxarg => do
-            argTy <- getAppVar (snd idxarg).type
-            whenT .| argTy == targetType.name .| fst idxarg
-          when (not $ null directlyRecArgs) $
-            logPoint FineDetails "deptycheck.derive.consRec" [targetType, con]
-              "- directly recursive args: \{show $ finToNat <$> directlyRecArgs}"
-          pure (fuelWeightExpr, fromList directlyRecArgs)
-      pure $ MkConRec con w
+      -- Check if constructor is disabled (tuneWeight = Nothing)
+      let isDisabled : Bool := case tuneImpl of
+            Nothing   => False
+            Just impl => isNothing $ the (Maybe (Nat1 -> Nat1)) (tuneWeight @{impl})
+      if isDisabled
+        then do
+          logPoint Info "deptycheck.derive.consRec" [targetType, con]
+            "- constructor disabled via ProbabilityTuning"
+          pure Nothing
+        else do
+          w : Either Nat1 (TTImp -> TTImp, SortedSet $ Fin con.args.length) <- case isRecursive {containingType=Just targetType} con of
+            False => pure $ Left $ case tuneImpl of
+              Nothing   => one
+              Just impl => fromMaybe id (tuneWeight @{impl}) one
+            True  => Right <$> do
+              fuelWeightExpr <- case tuneImpl of
+                Nothing   => pure id
+                Just impl => case tuneWeight @{impl} of
+                  Just tw => quote tw <&> \wm, expr => workaroundFromNat $ wm `applySyn` expr
+                  Nothing => pure id
+              let directlyRecArgs : List $ Fin con.args.length := flip mapMaybe con.args.withIdx $ \idxarg => do
+                argTy <- getAppVar (snd idxarg).type
+                whenT .| argTy == targetType.name .| fst idxarg
+              when (not $ null directlyRecArgs) $
+                logPoint FineDetails "deptycheck.derive.consRec" [targetType, con]
+                  "- directly recursive args: \{show $ finToNat <$> directlyRecArgs}"
+              pure (fuelWeightExpr, fromList directlyRecArgs)
+          pure $ Just $ MkConRec con w
+    let crsForTy = Prelude.List.mapMaybe id allCrs
     pure (targetType, crsForTy)
   let 0 _ : SortedMap Name (TypeInfo, List ConRec) := consRecs
 
