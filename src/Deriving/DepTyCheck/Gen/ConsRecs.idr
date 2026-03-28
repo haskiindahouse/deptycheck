@@ -173,40 +173,44 @@ weightableTyArgs : (consRecs : SortedMap Name (TypeInfo, List ConRec)) -> (ti : 
 weightableTyArgs consRecs ti = fromList $ flip List.mapMaybe ti.args.withIdx $ \(idx, ar) =>
   getAppVar ar.type >>= lookup' consRecs >>= \(wti, cons) => guard (weightableTy cons) >> (idx, wti,) <$> ar.name
 
+-- Build a ConRec for a single enabled constructor, given its weight function
+mkEnabledConRec : NamesInfoInTypes => Elaboration m => (targetType : TypeInfo) -> (con : Con) -> (tw : Nat1 -> Nat1) -> (tuneImpl : Maybe (ProbabilityTuning con.name)) -> m ConRec
+mkEnabledConRec targetType con tw tuneImpl = do
+  w : Either Nat1 (TTImp -> TTImp, SortedSet $ Fin con.args.length) <- case isRecursive {containingType=Just targetType} con of
+    False => pure $ Left $ tw one
+    True  => Right <$> do
+      fuelWeightExpr <- case tuneImpl of
+        Nothing   => pure id
+        Just impl => case tuneWeight @{impl} of
+          Just tw' => quote tw' <&> \wm, expr => workaroundFromNat $ wm `applySyn` expr
+          Nothing  => pure id
+      let directlyRecArgs : List $ Fin con.args.length := flip mapMaybe con.args.withIdx $ \idxarg => do
+        argTy <- getAppVar (snd idxarg).type
+        whenT .| argTy == targetType.name .| fst idxarg
+      when (not $ null directlyRecArgs) $
+        logPoint FineDetails "deptycheck.derive.consRec" [targetType, con]
+          "- directly recursive args: \{show $ finToNat <$> directlyRecArgs}"
+      pure (fuelWeightExpr, fromList directlyRecArgs)
+  pure $ MkConRec con w
+
+-- Process a single constructor: check tuning, return Nothing if disabled
+processOneCon : NamesInfoInTypes => Elaboration m => (targetType : TypeInfo) -> (con : Con) -> m (Maybe ConRec)
+processOneCon targetType con = do
+  tuneImpl <- search $ ProbabilityTuning con.name
+  case tuneImpl of
+    Nothing => Just <$> mkEnabledConRec targetType con id Nothing
+    Just impl => case tuneWeight @{impl} of
+      Nothing => do
+        logPoint Info "deptycheck.derive.consRec" [targetType, con]
+          "- constructor disabled via ProbabilityTuning"
+        pure Nothing
+      Just tw => Just <$> mkEnabledConRec targetType con tw (Just impl)
+
 -- Builds `ConsRecs` only for the given types, assuming that given `NamesInfoInTypes` contains info for them and their dependencies
 getConsRecsFor : NamesInfoInTypes => Elaboration m => (desiredTypes : ListMap Name TypeInfo) -> m ConsRecs
 getConsRecsFor desiredTypes = do
   consRecs <- for (toSortedMap desiredTypes) $ \targetType => logBounds DetailedTrace "deptycheck.derive.consRec" [targetType] $ do
-    allCrs <- for targetType.cons $ \con => do
-      tuneImpl <- search $ ProbabilityTuning con.name
-      -- Check if constructor is disabled (tuneWeight = Nothing)
-      let isDisabled : Bool := case tuneImpl of
-            Nothing   => False
-            Just impl => isNothing $ the (Maybe (Nat1 -> Nat1)) (tuneWeight @{impl})
-      if isDisabled
-        then do
-          logPoint Info "deptycheck.derive.consRec" [targetType, con]
-            "- constructor disabled via ProbabilityTuning"
-          pure Nothing
-        else do
-          w : Either Nat1 (TTImp -> TTImp, SortedSet $ Fin con.args.length) <- case isRecursive {containingType=Just targetType} con of
-            False => pure $ Left $ case tuneImpl of
-              Nothing   => one
-              Just impl => fromMaybe id (tuneWeight @{impl}) one
-            True  => Right <$> do
-              fuelWeightExpr <- case tuneImpl of
-                Nothing   => pure id
-                Just impl => case tuneWeight @{impl} of
-                  Just tw => quote tw <&> \wm, expr => workaroundFromNat $ wm `applySyn` expr
-                  Nothing => pure id
-              let directlyRecArgs : List $ Fin con.args.length := flip mapMaybe con.args.withIdx $ \idxarg => do
-                argTy <- getAppVar (snd idxarg).type
-                whenT .| argTy == targetType.name .| fst idxarg
-              when (not $ null directlyRecArgs) $
-                logPoint FineDetails "deptycheck.derive.consRec" [targetType, con]
-                  "- directly recursive args: \{show $ finToNat <$> directlyRecArgs}"
-              pure (fuelWeightExpr, fromList directlyRecArgs)
-          pure $ Just $ MkConRec con w
+    allCrs <- for targetType.cons $ processOneCon targetType
     let crsForTy = Prelude.List.mapMaybe id allCrs
     pure (targetType, crsForTy)
   let 0 _ : SortedMap Name (TypeInfo, List ConRec) := consRecs
