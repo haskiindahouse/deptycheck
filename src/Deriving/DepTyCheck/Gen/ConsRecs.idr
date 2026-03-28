@@ -173,33 +173,37 @@ weightableTyArgs : (consRecs : SortedMap Name (TypeInfo, List ConRec)) -> (ti : 
 weightableTyArgs consRecs ti = fromList $ flip List.mapMaybe ti.args.withIdx $ \(idx, ar) =>
   getAppVar ar.type >>= lookup' consRecs >>= \(wti, cons) => guard (weightableTy cons) >> (idx, wti,) <$> ar.name
 
+-- Build weight for an enabled constructor
+mkWeight : NamesInfoInTypes => Elaboration m => (targetType : TypeInfo) -> (con : Con) -> (tuneImpl : Maybe (ProbabilityTuning con.name)) -> m (Either Nat1 (TTImp -> TTImp, SortedSet $ Fin con.args.length))
+mkWeight targetType con tuneImpl = case isRecursive {containingType=Just targetType} con of
+  False => pure $ Left $ maybe one (\impl => tuneWeight @{impl} one) tuneImpl
+  True  => Right <$> do
+    fuelWeightExpr <- case tuneImpl of
+      Nothing   => pure id
+      Just impl => quote (tuneWeight @{impl}) <&> \wm, expr => workaroundFromNat $ wm `applySyn` expr
+    let directlyRecArgs : List $ Fin con.args.length := flip mapMaybe con.args.withIdx $ \idxarg => do
+      argTy <- getAppVar (snd idxarg).type
+      whenT .| argTy == targetType.name .| fst idxarg
+    when (not $ null directlyRecArgs) $
+      logPoint FineDetails "deptycheck.derive.consRec" [targetType, con]
+        "- directly recursive args: \{show $ finToNat <$> directlyRecArgs}"
+    pure (fuelWeightExpr, fromList directlyRecArgs)
+
 -- Process a single constructor: check tuning, return Nothing if disabled
 processOneCon : NamesInfoInTypes => Elaboration m => (targetType : TypeInfo) -> (con : Con) -> m (Maybe ConRec)
 processOneCon targetType con = do
   tuneImpl <- search $ ProbabilityTuning con.name
-  -- Check if constructor is disabled
-  let isDisabled : Bool := case tuneImpl of
-        Nothing   => False
-        Just impl => not (enabled @{impl})
-  if isDisabled
-    then do
-      logPoint Info "deptycheck.derive.consRec" [targetType, con]
-        "- constructor disabled via ProbabilityTuning"
-      pure Nothing
-    else do
-      w : Either Nat1 (TTImp -> TTImp, SortedSet $ Fin con.args.length) <- case isRecursive {containingType=Just targetType} con of
-        False => pure $ Left $ maybe one (\impl => tuneWeight @{impl} one) tuneImpl
-        True  => Right <$> do
-          fuelWeightExpr <- case tuneImpl of
-            Nothing   => pure id
-            Just impl => quote (tuneWeight @{impl}) <&> \wm, expr => workaroundFromNat $ wm `applySyn` expr
-          let directlyRecArgs : List $ Fin con.args.length := flip mapMaybe con.args.withIdx $ \idxarg => do
-            argTy <- getAppVar (snd idxarg).type
-            whenT .| argTy == targetType.name .| fst idxarg
-          when (not $ null directlyRecArgs) $
-            logPoint FineDetails "deptycheck.derive.consRec" [targetType, con]
-              "- directly recursive args: \{show $ finToNat <$> directlyRecArgs}"
-          pure (fuelWeightExpr, fromList directlyRecArgs)
+  case tuneImpl of
+    Just impl => case enabled @{impl} of
+      False => do
+        logPoint Info "deptycheck.derive.consRec" [targetType, con]
+          "- constructor disabled via ProbabilityTuning"
+        pure Nothing
+      True => do
+        w <- mkWeight targetType con (Just impl)
+        pure $ Just $ MkConRec con w
+    Nothing => do
+      w <- mkWeight targetType con Nothing
       pure $ Just $ MkConRec con w
 
 -- Builds `ConsRecs` only for the given types, assuming that given `NamesInfoInTypes` contains info for them and their dependencies
