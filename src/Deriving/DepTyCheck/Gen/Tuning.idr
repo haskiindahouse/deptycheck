@@ -53,16 +53,19 @@ namespace Probability
 
   ||| Interface for tuning probabilities of constructors in derived generators.
   |||
-  ||| `tuneWeight` returns `Nothing` to disable a constructor entirely
-  ||| (its code won't be derived), or `Just f` to adjust its weight.
+  ||| Set `enabled = False` to disable a constructor entirely (its code won't be derived).
+  ||| Set `tuneWeight` to adjust the constructor's weight (default: id).
   |||
   ||| Example — disable a constructor:
   ||| ```idris
   ||| ProbabilityTuning `{MyConstructor} where
   |||   isConstructor = itIsConstructor
-  |||   tuneWeight = Nothing
+  |||   enabled = False
   ||| ```
   public export
   interface ProbabilityTuning (0 n : Name) where
     0 isConstructor : (con : IsConstructor n ** GenuineProof con)
-    tuneWeight : Maybe (Nat1 -> Nat1)
+    enabled : Bool
+    enabled = True
+    tuneWeight : Nat1 -> Nat1
+    tuneWeight = id
