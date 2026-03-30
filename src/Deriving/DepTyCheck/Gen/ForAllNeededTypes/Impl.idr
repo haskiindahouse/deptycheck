@@ -33,6 +33,86 @@ lookupLengthChecked intSig m = lookup intSig m >>= \(extSig, name) => (name,) <$
                                     Yes prf => Just $ Element extSig prf
                                     No _    => Nothing
 
+-- Helper: get n-th element of a list (0-indexed)
+listIndex : Nat -> List a -> Maybe a
+listIndex _     []        = Nothing
+listIndex Z     (x :: _)  = Just x
+listIndex (S k) (_ :: xs) = listIndex k xs
+
+-- Check if the arg type at the given index in the target type has a simple type (no type params)
+isSimpleArgType : GenSignature -> Nat -> Bool
+isSimpleArgType sig n = case listIndex n sig.targetType.args of
+  Nothing => False
+  Just (MkArg _ _ _ ty) => case ty of
+    IVar _ _ => True
+    _        => False
+
+-- Find an external gen where intSig.givenParams is a proper subset of extSig.givenParams.
+-- Only matches when: same type, proper subset, ext gen has ALL params given, extras have simple types.
+lookupSupersetMatch : (intSig : GenSignature) -> SortedMap GenSignature (ExternalGenSignature, Name) ->
+                      Maybe (Name, ExternalGenSignature, List Nat)
+lookupSupersetMatch intSig m = go $ SortedMap.toList m where
+  go : List (GenSignature, (ExternalGenSignature, Name)) -> Maybe (Name, ExternalGenSignature, List Nat)
+  go [] = Nothing
+  go ((_, (extSig, name)) :: rest) =
+    let (extTyName, extGivNats) = ExternalGenSignature.characteristics extSig
+        (intTyName, intGivNats) = characteristics intSig
+        extraNats = filter (\n => not $ n `elem` intGivNats) extGivNats
+    in if extTyName == intTyName &&
+          length extGivNats > length intGivNats &&
+          all (\n => n `elem` extGivNats) intGivNats &&
+          length extGivNats == length intSig.targetType.args &&
+          all (isSimpleArgType intSig) extraNats
+       then Just (name, extSig, extraNats)
+       else go rest
+
+-- Build a wrapper that generates extra params, calls the external gen, and wraps in DPair.
+buildSupersetCall : DerivationClosure m => NamesInfoInTypes => ConsRecs => Elaboration m =>
+                    (intSig : GenSignature) -> ExternalGenSignature -> Name ->
+                    List Nat -> Vect intSig.givenParams.size TTImp ->
+                    m (TTImp, Maybe (gend ** Vect gend $ Fin gend))
+buildSupersetCall intSig extSig extName extraNats callerValues = do
+
+  -- Step 1: For each extra param, generate a sub-generator call
+  extraCalls <- for extraNats $ \natIdx => do
+    let Just (MkArg _ _ _ argTy) = listIndex natIdx intSig.targetType.args
+      | Nothing => fail "INTERNAL ERROR: superset extra param index \{show natIdx} out of bounds"
+    let IVar _ tyName = argTy
+      | _ => fail "INTERNAL ERROR: superset extra param \{show natIdx} has non-simple type"
+    let Just extraTyInfo = lookupType tyName
+      | Nothing => fail "INTERNAL ERROR: cannot find type info for superset extra param type \{show tyName}"
+    let extraSig : GenSignature = MkGenSignature extraTyInfo @{believe_me ()} empty
+    let emptyVals : Vect extraSig.givenParams.size TTImp = believe_me (the (Vect 0 TTImp) [])
+    (extraGenExpr, _) <- assert_total $ callGen extraSig (var outmostFuelArg) emptyVals
+    let bindName = UN $ Basic $ "^superset_extra_" ++ show natIdx ++ "^"
+    pure (natIdx, extraGenExpr, bindName)
+
+  -- Step 2: Build a map from Nat index to TTImp value (caller values + extra bind vars)
+  let intGivList = Prelude.toList intSig.givenParams
+  let callerPairs : List (Nat, TTImp) = zip (map finToNat intGivList) (toList callerValues)
+  let extraPairs : List (Nat, TTImp) = map (\(ni, _, bn) => (ni, var bn)) extraCalls
+  let allValMap : SortedMap Nat TTImp = SortedMap.fromList (callerPairs ++ extraPairs)
+
+  -- Step 3: Build full values Vect for external gen (mapped over extSig's asVect for correct size)
+  let fullValues : Vect extSig.givenParams.size TTImp =
+        extSig.givenParams.asVect <&> \(idx, _) =>
+          fromMaybe implicitTrue $ SortedMap.lookup (finToNat idx) allValMap
+
+  -- Step 4: Call the external gen
+  let extCall = callExternalGen extSig extName (var outmostFuelArg) fullValues
+
+  -- Step 5: Build DPair wrapping + pure
+  let resultBind = UN $ Basic "^superset_result^"
+  let extraBindNames : List Name = map (\(_, _, bn) => bn) extraCalls
+  let dpairExpr = foldr (\bn, r => var `{Builtin.DPair.MkDPair} .$ var bn .$ r) (var resultBind) extraBindNames
+  let pureExpr = `(Prelude.pure {f=Test.DepTyCheck.Gen.Gen _} ~dpairExpr)
+
+  -- Step 6: Build monadic chain (inside-out via foldr)
+  let innerBind = `(~extCall >>= ~(lam (MkArg MW ExplicitArg (Just resultBind) implicitFalse) pureExpr))
+  let wrapperExpr = foldr (\(_, genExpr, bn), inner => `(~genExpr >>= ~(lam (MkArg MW ExplicitArg (Just bn) implicitFalse) inner))) innerBind extraCalls
+
+  pure (wrapperExpr, Nothing)
+
 deriveAll : NamesInfoInTypes => ConsRecs => (cc : ClosuringContext m) => DeriveBodyForType => DerivationClosure m => Elaboration m =>
             ListSet TypeInfo -> List (Decl, Decl) -> m (ListSet TypeInfo, List (Decl, Decl))
 deriveAll weightFunTys decls {cc=(alreadyDerived, _)}= do
@@ -60,11 +140,21 @@ DeriveBodyForType => ClosuringContext m => Elaboration m => SortedMap GenSignatu
 
   callGen sig fuel values = do
 
+    -- DEBUG: log what we're looking for
+    logPoint Info "deptycheck.derive.closuring.lookup" [sig] "looking for external gen, givens=\{showGivens sig}"
+
     -- look for external gens, and call it if exists
     let Nothing = lookupLengthChecked sig %search
       | Just (name, Element extSig lenEq) =>
           logValue Details "deptycheck.derive.closuring.external" [sig] "is used as an external generator" $
             (callExternalGen extSig name (var outmostFuelArg) $ rewrite lenEq in values, Just (_ ** extSig.gendOrder))
+
+    -- look for superset match (external gen with more given params than we need)
+    let Nothing = lookupSupersetMatch sig %search
+      | Just (name, extSig, extraNats) => do
+          logPoint Details "deptycheck.derive.closuring.superset" [sig]
+            "superset match via \{show name}, extras=\{show extraNats}"
+          assert_total $ buildSupersetCall sig extSig name extraNats values
 
     -- put to derivation queue if necessary
     when (not $ List.Set.contains sig %search) $ do
