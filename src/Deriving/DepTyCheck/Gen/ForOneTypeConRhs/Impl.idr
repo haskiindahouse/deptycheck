@@ -300,7 +300,9 @@ export
           -- Form an expression of the RHS of a bind; simplify lambda if subgeneration result type does not require pattern matching
           let bindRHS = \cont => case bindSubgenResult of
                                    IBindVar _ n => lam (MkArg MW ExplicitArg (Just n) implicitFalse) cont
-                                   _            => `(\ ~bindSubgenResult => ~cont)
+                                   _            => let dpairArg : Name = UN $ Basic "^dpair_arg^"
+                                                   in lam (MkArg MW ExplicitArg (Just dpairArg) implicitFalse)
+                                                          (iCase (var dpairArg) implicitFalse [patClause bindSubgenResult cont])
 
           -- Chain the subgen call with a given continuation
           pure $ \cont => `(~subgenCall >>= ~(bindRHS cont))
