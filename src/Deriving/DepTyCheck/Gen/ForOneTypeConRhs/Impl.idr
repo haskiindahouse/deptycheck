@@ -297,10 +297,22 @@ export
             | Nothing => fail "INTERNAL ERROR: cannot reorder subgenerated arguments"
           let bindSubgenResult = foldr (\l, r => var `{Builtin.DPair.MkDPair} .$ l .$ r) genedArg subgeneratedArgs
 
-          -- Form an expression of the RHS of a bind; simplify lambda if subgeneration result type does not require pattern matching
+          -- Form an expression of the RHS of a bind.
+          -- For 1-level DPair or simple var: use direct lambda.
+          -- For 2+ level DPair: cascade into 1-level binds to avoid spcfox compiler bug.
           let bindRHS = \cont => case bindSubgenResult of
-                                   IBindVar _ n => lam (MkArg MW ExplicitArg (Just n) implicitFalse) cont
-                                   _            => `(\ ~bindSubgenResult => ~cont)
+                IBindVar _ n => lam (MkArg MW ExplicitArg (Just n) implicitFalse) cont
+                -- 1-level DPair: MkDPair x y — direct lambda works
+                IApp _ (IApp _ (IVar _ mkdp) lhs) (IBindVar _ _) =>
+                  `(\ ~bindSubgenResult => ~cont)
+                -- 2+ level DPair: cascade — peel off outermost, bind rest via pure
+                IApp _ (IApp _ (IVar _ mkdp) outerArg) innerDPair =>
+                  let restName = bindVar "^dpair_rest^"
+                      outerPat = var `{Builtin.DPair.MkDPair} .$ outerArg .$ restName
+                      innerBind = `(Prelude.pure {f=Test.DepTyCheck.Gen.Gen _} ~restName >>= ~(`(\ ~innerDPair => ~cont)))
+                  in `(\ ~outerPat => ~innerBind)
+                -- fallback
+                _ => `(\ ~bindSubgenResult => ~cont)
 
           -- Chain the subgen call with a given continuation
           pure $ \cont => `(~subgenCall >>= ~(bindRHS cont))
