@@ -62,7 +62,8 @@ lookupSupersetMatch intSig m = go $ SortedMap.toList m where
           length extGivNats > length intGivNats &&
           all (\n => n `elem` extGivNats) intGivNats &&
           length extGivNats == length intSig.targetType.args &&
-          all (isSimpleArgType intSig) extraNats
+          all (isSimpleArgType intSig) extraNats &&
+          length extraNats <= 1  -- spcfox can't compile 2+ level DPair binds
        then Just (name, extSig, extraNats)
        else go rest
 
