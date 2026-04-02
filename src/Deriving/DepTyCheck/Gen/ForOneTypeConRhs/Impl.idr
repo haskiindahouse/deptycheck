@@ -305,12 +305,18 @@ export
                 -- 1-level DPair: MkDPair x y — direct lambda works
                 IApp _ (IApp _ (IVar _ mkdp) lhs) (IBindVar _ _) =>
                   `(\ ~bindSubgenResult => ~cont)
-                -- 2+ level DPair: cascade — peel off outermost, bind rest via pure
+                -- 2+ level DPair: cascade — peel off outermost, bind rest via lam+iCase
                 IApp _ (IApp _ (IVar _ mkdp) outerArg) innerDPair =>
-                  let restName = bindVar "^dpair_rest^"
-                      outerPat = var `{Builtin.DPair.MkDPair} .$ outerArg .$ restName
-                      innerBind = `(Prelude.pure {f=Test.DepTyCheck.Gen.Gen _} ~restName >>= ~(`(\ ~innerDPair => ~cont)))
-                  in `(\ ~outerPat => ~innerBind)
+                  let outerBind : Name = UN $ Basic "^dpair_outer^"
+                      restBind : Name = UN $ Basic "^dpair_rest^"
+                      innerBind : Name = UN $ Basic "^dpair_inner^"
+                      outerPat = var `{Builtin.DPair.MkDPair} .$ outerArg .$ bindVar "^dpair_rest^"
+                      innerLam = lam (MkArg MW ExplicitArg (Just innerBind) implicitFalse)
+                                     (iCase (var innerBind) implicitFalse [patClause innerDPair cont])
+                      restExpr = `(Prelude.pure {f=Test.DepTyCheck.Gen.Gen _} ~(var restBind) >>= ~innerLam)
+                      outerLam = lam (MkArg MW ExplicitArg (Just outerBind) implicitFalse)
+                                     (iCase (var outerBind) implicitFalse [patClause outerPat restExpr])
+                  in outerLam
                 -- fallback
                 _ => `(\ ~bindSubgenResult => ~cont)
 
