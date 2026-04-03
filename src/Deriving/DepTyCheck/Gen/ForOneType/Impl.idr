@@ -40,14 +40,25 @@ export
 DeriveBodyRhsForCon => DeriveBodyForType where
   canonicBody sig n = do
 
+    -- determine active constructors: apply constructor filter if present
+    let nameBase : Name -> Name
+        nameBase (NS _ x) = nameBase x
+        nameBase (DN _ x) = nameBase x
+        nameBase x        = x
+    let nameMatchesAny : Name -> List Name -> Bool
+        nameMatchesAny cn fns = any (\fn => nameBase cn == nameBase fn) fns
+    let filteredCons = case sig.constructorFilter of
+          Nothing    => sig.targetType.cons
+          Just names => filter (\con => nameMatchesAny con.name names) sig.targetType.cons
+
     -- calculate which constructors are recursive and spend fuel, and which are not
     -- (this also filters out constructors disabled via ProbabilityTuning Nothing)
     let Just consRecs = lookupConsWithWeight sig
       | Nothing => fail "INTERNAL ERROR: unknown type for consRecs: \{show sig.targetType.name}"
 
-    -- active constructors = only those present in consRecs (disabled ones filtered out)
+    -- active constructors = filtered by constructorFilter AND present in consRecs
     let activeConsNames = map ((.name) . fst) consRecs
-    let activeCons = filter (\con => con.name `elem` activeConsNames) sig.targetType.cons
+    let activeCons = filter (\con => con.name `elem` activeConsNames) filteredCons
 
     -- check that there is at least one active constructor
     Prelude.when .| null activeCons .| fail "No constructors found for the type `\{show sig.targetType.name}` (all disabled via tuning?)"

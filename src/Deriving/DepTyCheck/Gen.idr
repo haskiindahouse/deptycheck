@@ -289,6 +289,15 @@ callMainDerivedGen sig fuelArg = do
   map (reorderGend True sig.gendOrder . fst) $
     callGen intSig (var fuelArg) $ rewrite prf in sig.givenParams.asVect <&> \(_, _, name) => var $ nameMod name
 
+callMainDerivedGenSubset : DerivationClosure m => NamesInfoInTypes => ConsRecs => (constructors : List Name) -> ExternalGenSignature -> (fuelArg : Name) -> m TTImp
+callMainDerivedGenSubset constructors sig fuelArg = do
+  let Element intSig prf = internalise sig
+  let filteredIntSig : GenSignature := MkGenSignature intSig.targetType @{intSig.targetTypeCorrect} intSig.givenParams (Just constructors)
+  let values : Vect intSig.givenParams.size TTImp :=
+        rewrite prf in sig.givenParams.asVect <&> \(_, _, name) => var $ nameMod name
+  map (reorderGend True sig.gendOrder . fst) $
+    callGen filteredIntSig (var fuelArg) (believe_me values)
+
 wrapFuel : (fuelArg : Name) -> TTImp -> TTImp
 wrapFuel fuelArg = lam $ MkArg MW ExplicitArg (Just fuelArg) `(Data.Fuel.Fuel)
 
@@ -305,6 +314,17 @@ deriveGenExpr signature = do
   _ <- logBounds Trace "deptycheck.derive.namesInfo" [] $ getNamesInfoInTypes signature.targetType
   _ <- logBounds Trace "deptycheck.derive.consRec" [] getConsRecs
   (callExpr, locals) <- runCanonic externalsSigToName $ callMainDerivedGen signature fuelArg
+  wrapFuel fuelArg <$> internalGenCallingLambda checkResult (local locals callExpr)
+
+export
+deriveGenSubsetExpr : DeriveBodyForType => (constructors : List Name) -> (signature : TTImp) -> Elab TTImp
+deriveGenSubsetExpr constructors signature = do
+  checkResult@(signature ** externals ** _) <- checkTypeIsGen DerivationTask signature
+  let externalsSigToName = fromList $ externals.externals <&> \(sig, _) => (sig, nameForGen sig)
+  let fuelArg = outmostFuelArg
+  _ <- logBounds Trace "deptycheck.derive.namesInfo" [] $ getNamesInfoInTypes signature.targetType
+  _ <- logBounds Trace "deptycheck.derive.consRec" [] getConsRecs
+  (callExpr, locals) <- runCanonic externalsSigToName $ callMainDerivedGenSubset constructors signature fuelArg
   wrapFuel fuelArg <$> internalGenCallingLambda checkResult (local locals callExpr)
 
 ||| The entry-point function of automatic derivation of `Gen`'s.
@@ -350,6 +370,16 @@ deriveGen = do
   Just signature <- goal
      | Nothing => fail "The goal signature is not found. Generators derivation must be used only for fully defined signatures"
   tt <- deriveGenExpr signature
+  check tt
+
+||| Derive generator for a subset of constructors of the target type.
+||| Usage: `myGen = deriveGenSubset [`{Con1}, `{Con2}, `{Con3}]`
+export %macro
+deriveGenSubset : DeriveBodyForType => (constructors : List Name) -> Elab a
+deriveGenSubset constructors = do
+  Just signature <- goal
+     | Nothing => fail "The goal signature is not found. Generators derivation must be used only for fully defined signatures"
+  tt <- deriveGenSubsetExpr constructors signature
   check tt
 
 ||| Alternative entry-point function of automatic derivation of `Gen`'s.

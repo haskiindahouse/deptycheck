@@ -38,7 +38,7 @@ EmptyCons = MainCoreDerivator @{EmptyCons'}
 callSimpleGen : NamesInfoInTypes => ConsRecs => DerivationClosure m => Elaboration m => TypeInfo -> (fuel : TTImp) -> m TTImp
 callSimpleGen tyi fuel = do
   _ <- ensureTyArgsNamed tyi
-  map fst $ callGen (MkGenSignature tyi SortedSet.empty) fuel $ believe_me $ Vect.Nil {elem = TTImp}
+  map fst $ callGen (MkGenSignature tyi SortedSet.empty Nothing) fuel $ believe_me $ Vect.Nil {elem = TTImp}
 
 callStrGen : NamesInfoInTypes => ConsRecs => DerivationClosure m => Elaboration m => (fuel : TTImp) -> m TTImp
 callStrGen = callSimpleGen $ typeInfoForPrimType StringType

@@ -22,7 +22,7 @@ ClosuringContext m =
   )
 
 nameForGen : GenSignature -> Name
-nameForGen sig = let (ty, givs) = characteristics sig in UN $ Basic $ "<\{ty}>\{show givs}"
+nameForGen sig = let (ty, givs, filt) = characteristics sig in UN $ Basic $ "<\{ty}>\{show givs}\{maybe "" (\f => "!" ++ show f) filt}"
 -- I'm using `UN` but containing chars that cannot be present in the code parsed from the Idris frontend.
 
 -- Instead of staticaly ensuring that map holds only correct values, we check dynamically, because it's hard to go through `==`-based lookup of maps.
@@ -56,7 +56,7 @@ lookupSupersetMatch intSig m = go $ SortedMap.toList m where
   go [] = Nothing
   go ((_, (extSig, name)) :: rest) =
     let (extTyName, extGivNats) = ExternalGenSignature.characteristics extSig
-        (intTyName, intGivNats) = characteristics intSig
+        (intTyName, intGivNats, _) = characteristics intSig
         extraNats = filter (\n => not $ n `elem` intGivNats) extGivNats
     in if extTyName == intTyName &&
           length extGivNats > length intGivNats &&
@@ -82,7 +82,7 @@ buildSupersetCall intSig extSig extName extraNats callerValues = do
       | _ => fail "INTERNAL ERROR: superset extra param \{show natIdx} has non-simple type"
     let Just extraTyInfo = lookupType tyName
       | Nothing => fail "INTERNAL ERROR: cannot find type info for superset extra param type \{show tyName}"
-    let extraSig : GenSignature = MkGenSignature extraTyInfo @{believe_me ()} empty
+    let extraSig : GenSignature = MkGenSignature extraTyInfo @{believe_me ()} empty Nothing
     let emptyVals : Vect extraSig.givenParams.size TTImp = believe_me (the (Vect 0 TTImp) [])
     (extraGenExpr, _) <- assert_total $ callGen extraSig (var outmostFuelArg) emptyVals
     let bindName = UN $ Basic $ "^superset_extra_" ++ show natIdx ++ "^"

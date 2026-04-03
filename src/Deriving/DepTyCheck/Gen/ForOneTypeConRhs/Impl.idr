@@ -278,7 +278,7 @@ export
 
           -- Form a task for subgen
           let (subgivensLength ** subgivens) = mapMaybe (\(ie, idx) => (idx,) <$> getRight ie) $ depArgs `zip` Fin.range
-          let subsig : GenSignature := MkGenSignature typeOfGened $ fromList $ fst <$> toList subgivens
+          let subsig : GenSignature := MkGenSignature typeOfGened (fromList $ fst <$> toList subgivens) Nothing
           let Yes Refl = decEq subsig.givenParams.size subgivensLength
             | No _ => fail "INTERNAL ERROR: error in given params set length computation"
 

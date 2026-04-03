@@ -27,7 +27,7 @@ ATAN = ensureTyArgsNamed ty
 
 export
 chk : (ty : TypeInfo) -> (0 _ : AllTyArgsNamed ty) => List (Fin ty.tyArgs.length) -> Type -> TestCaseData
-chk ty giv expr = (canonicSig (MkGenSignature ty $ fromList giv), Fuel -> expr)
+chk ty giv expr = (canonicSig (MkGenSignature ty (fromList giv) Nothing), Fuel -> expr)
 
 export
 caseVerdict : TestCaseDesc -> Elab String
