@@ -1,0 +1,11 @@
+1/1: Building ValidateInput (ValidateInput.idr)
+Error: While processing right hand side of checkedGen. Error during reflection: Target type `Builtin.(===)` is not a top-level data definition
+
+ValidateInput:1
+ 4 |
+ 5 | %language ElabReflection
+ 6 | %default total
+ 7 |
+ 8 | checkedGen : Fuel -> (x, y : Type) -> Gen MaybeEmpty (x = y)
+                                           ^^^
+

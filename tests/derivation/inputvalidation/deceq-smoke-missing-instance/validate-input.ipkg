@@ -1,0 +1,5 @@
+package validate-input
+
+opts = "--no-color --console-width 0"
+
+depends = deptycheck

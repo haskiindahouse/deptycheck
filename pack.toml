@@ -2,6 +2,10 @@
 ### Settings ###
 ################
 
+[idris2]
+url = "file:///home/developer/models/auto-improve/idris2-call-by-need-speed"
+commit = "ca73c33ee8333779ca01614e2c21f665bc9f28c5"
+
 [install]
 whitelist = [ "deptycheck-docs", "pil-fun", "pil-dyn" ]
 
